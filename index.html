@@ -18,9 +18,35 @@ canvas { max-width: 100%; height: auto; }
 .graficos-container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
 .grafico-box { flex: 1 1 300px; max-width: 400px; background-color: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align: center; }
 .grafico-box h5 { margin-bottom: 15px; }
+
+
+
+/* Corpo da página com fundo */
+body {
+    background-color: #f0f2f5; /* cor de fundo da tela */
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+    min-height: 100vh;
+    margin: 0;
+}
+
+/* Painel principal */
+#painel {
+    background-color: #ffffff;   /* fundo branco */
+    border-radius: 20px;         /* cantos arredondados */
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2); /* sombra maior */
+    padding: 30px;
+    width: 100%;
+    max-width: 1200px;           /* largura máxima */
+}
+
+
 </style>
 </head>
 <body>
+
+      <div id="painel">
 <div class="container" id="conteudoPDF">
     <h2>Análise de Conexões</h2>
     <input type="file" id="csvFile" class="form-control mb-3">
@@ -83,6 +109,7 @@ canvas { max-width: 100%; height: auto; }
             <li>Não substitui ferramentas profissionais de análise de tráfego ou qualidade de serviço (QoS).</li>
         </ul>
     </div>
+</div>
 </div>
 
 <script>
@@ -396,4 +423,3 @@ async function exportarParaPDF() {
 </script>
 </body>
 </html>
-
