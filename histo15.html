@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Análise de Conexões</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/plugins/html.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+body { padding: 20px; background-color: #f8f9fa; }
+h2 { text-align: center; margin-bottom: 30px; }
+.table-responsive { max-height: 300px; overflow-y: auto; margin-bottom: 30px; }
+canvas { max-width: 100%; height: auto; }
+.graficos-container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+.grafico-box { flex: 1 1 300px; max-width: 400px; background-color: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align: center; }
+.grafico-box h5 { margin-bottom: 15px; }
+</style>
+</head>
+<body>
+<div class="container" id="conteudoPDF">
+    <h2>Análise de Conexões</h2>
+    <input type="file" id="csvFile" class="form-control mb-3">
+    <button id="exportBtn" class="btn btn-success mb-3">Exportar XLSX</button>
+    <button id="exportPdfBtn" class="btn btn-primary mb-3">Exportar PDF</button>
+    <button id="limparBtn" class="btn btn-warning mb-3">Limpar Tudo</button>
+
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered" id="tabelaResultados">
+            <thead><tr id="cabecalhoTabela"></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="graficos-container">
+        <div class="grafico-box">
+            <h5>Tecnologia (%)</h5>
+            <canvas id="graficoTecnologia"></canvas>
+        </div>
+        <div class="grafico-box">
+            <h5>Tempo Online (%)</h5>
+            <canvas id="graficoOffline"></canvas>
+        </div>
+        <div class="grafico-box">
+            <h5>Tráfego Total (%)</h5>
+            <canvas id="graficoTrafic"></canvas>
+        </div>
+        <div class="grafico-box">
+            <h5>Instabilidade por APN</h5>
+            <canvas id="graficoInstavel"></canvas>
+        </div>
+        <div class="grafico-box">
+            <h5>Estabilidade Geral</h5>
+            <canvas id="graficoEstabilidade"></canvas>
+        </div>
+    </div>
+
+    <div class="table-responsive mt-4">
+        <h5>Resumo dos Valores Utilizados nos Gráficos</h5>
+        <table class="table table-bordered table-striped" id="tabelaResumo">
+            <thead><tr><th>Métrica</th><th>Categoria</th><th>Valor</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="alert alert-info mt-4" id="avisos">
+        <h5>O que este sistema faz:</h5>
+        <ul>
+            <li>Analisa arquivos CSV com registros de conexão da rede móvel.</li>
+            <li>Exibe tabelas detalhadas de início, término, duração, rede, tecnologia, APN, motivo, upload, download e total.</li>
+            <li>Adiciona coluna "Instabilidade" indicando sessões curtas ou instáveis.</li>
+            <li>Gera gráficos de tecnologia, tempo offline, tráfego, instabilidade por APN e estabilidade geral.</li>
+        </ul>
+        <h5>O que este sistema <strong>não</strong> faz:</h5>
+        <ul>
+            <li>Não corrige ou altera dados da rede.</li>
+            <li>Não substitui sistemas de monitoramento em tempo real.</li>
+            <li>Não prevê falhas futuras, apenas analisa dados históricos.</li>
+            <li>Não conecta diretamente aos servidores ou dispositivos móveis.</li>
+            <li>Não substitui ferramentas profissionais de análise de tráfego ou qualidade de serviço (QoS).</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // --- Funções auxiliares ---
+    const duracaoParaSegundos = duracao => {
+        if(!duracao) return 0;
+        return duracao.split(',').reduce((total, p) => {
+            const match = p.trim().match(/(\d+)([dhms])/i);
+            if(match){
+                const valor = parseInt(match[1]);
+                const tipo = match[2].toLowerCase();
+                if(tipo==='d') total += valor*86400;
+                if(tipo==='h') total += valor*3600;
+                if(tipo==='m') total += valor*60;
+                if(tipo==='s') total += valor;
+            }
+            return total;
+        }, 0);
+    };
+
+    const tamanhoParaBytes = tamanho => {
+        if(!tamanho) return 0;
+        tamanho = tamanho.replace(',', '.').trim();
+        const match = tamanho.match(/([\d.]+)\s*(KB|MB|GB|B)?/i);
+        if(!match) return 0;
+        let valor = parseFloat(match[1]);
+        const unidade = match[2]?.toUpperCase()||'B';
+        if(unidade==='KB') valor *= 1024;
+        if(unidade==='MB') valor *= 1024*1024;
+        if(unidade==='GB') valor *= 1024*1024*1024;
+        return valor;
+    };
+
+    // Variáveis globais dos gráficos
+    let graficoTecnologiaAtual=null, graficoOfflineAtual=null, graficoTraficAtual=null, graficoInstavelAtual=null, graficoEstabilidadeAtual=null;
+
+    // --- Processar CSV ---
+    const csvFile = document.getElementById('csvFile');
+    csvFile.addEventListener('change', async e => {
+        const file = e.target.files[0]; if(!file) return;
+        const texto = await file.text();
+        const linhas = texto.split(/\r?\n/).filter(l => l.trim() !== '');
+        if(!linhas.length) return;
+        const delimitador = linhas[0].includes(';') ? ';' : ',';
+
+        const cabecalho = linhas.shift().split(delimitador).map(h => h.trim());
+        const cabecalhoTabela = document.getElementById('cabecalhoTabela'); 
+        cabecalhoTabela.innerHTML = '';
+        cabecalho.forEach(h => { 
+            const th = document.createElement('th'); th.textContent = h; cabecalhoTabela.appendChild(th); 
+        });
+        const thExtra = document.createElement('th'); thExtra.textContent = 'Instabilidade'; 
+        cabecalhoTabela.appendChild(thExtra);
+
+        const tbody = document.querySelector('#tabelaResultados tbody'); 
+        tbody.innerHTML = '';
+
+        const tempoPorRedeTec={}, trafegoPorRedeTec={}, tecnologiaContagem={}, instabilidadePorAPN={};
+        let totalOfflineGlobal = 0, totalTrfGlobal = 0;
+        const LIMITE_SESSAO_CURTA = 120;
+
+        let totalOK = 0, totalInstavel = 0;
+
+        linhas.forEach(l => {
+            const cols = l.split(delimitador).map(c => c.trim()); 
+            if(cols.length !== cabecalho.length) return;
+
+            const duracao = cols[cabecalho.indexOf('Duracao')]?.trim();
+            const termino = cols[cabecalho.indexOf('Termino')]?.trim().toLowerCase();
+            const rede = cols[cabecalho.indexOf('Rede')]?.trim();
+            const tecnologia = cols[cabecalho.indexOf('Tecnologia')]?.trim();
+            const upload = cols[cabecalho.indexOf('Upload')]?.trim();
+            const download = cols[cabecalho.indexOf('Download')]?.trim();
+            const apn = cols[cabecalho.indexOf('APN')]?.trim();
+
+            const chave = `${rede} - ${tecnologia}`;
+            const segundos = duracaoParaSegundos(duracao);
+
+            tecnologiaContagem[tecnologia] = (tecnologiaContagem[tecnologia]||0) + 1;
+
+            if(!tempoPorRedeTec[chave]) tempoPorRedeTec[chave] = {offline:0};
+            if(termino !== 'online') { 
+                tempoPorRedeTec[chave].offline += segundos; 
+                totalOfflineGlobal += segundos; 
+            }
+
+            if(!trafegoPorRedeTec[chave]) trafegoPorRedeTec[chave]=0;
+            trafegoPorRedeTec[chave] += tamanhoParaBytes(upload)+tamanhoParaBytes(download);
+            totalTrfGlobal += tamanhoParaBytes(upload)+tamanhoParaBytes(download);
+
+            const sessaoCurta = (termino!=='online' && segundos<LIMITE_SESSAO_CURTA);
+            if(sessaoCurta) { 
+                instabilidadePorAPN[apn] = (instabilidadePorAPN[apn]||0)+1;
+                totalInstavel++;
+            } else {
+                totalOK++;
+            }
+
+            const tr = document.createElement('tr');
+            cols.forEach(c => { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); });
+            const tdInstavel = document.createElement('td'); tdInstavel.textContent = sessaoCurta ? "Instável" : "OK"; tr.appendChild(tdInstavel);
+            tbody.appendChild(tr);
+        });
+
+        // --- Criar gráficos ---
+        const criarGraficoPie = (ctx, labels, dados) => new Chart(ctx, {
+            type:'pie',
+            data:{labels, datasets:[{data:dados, backgroundColor:labels.map((_,i)=>`hsl(${i*60%360},70%,50%)`)}]},
+            options:{responsive:true, plugins:{legend:{position:'bottom'}}}
+        });
+
+        if(graficoTecnologiaAtual) graficoTecnologiaAtual.destroy();
+        graficoTecnologiaAtual = criarGraficoPie(document.getElementById('graficoTecnologia').getContext('2d'), Object.keys(tecnologiaContagem), Object.values(tecnologiaContagem));
+
+        if(graficoOfflineAtual) graficoOfflineAtual.destroy();
+        const labelsOffline=[], valoresOffline=[];
+        Object.keys(tempoPorRedeTec).forEach(chave=>{
+            if(tempoPorRedeTec[chave].offline>0){
+                labelsOffline.push(chave);
+                valoresOffline.push(totalOfflineGlobal>0?((tempoPorRedeTec[chave].offline/totalOfflineGlobal)*100).toFixed(2):0);
+            }
+        });
+        graficoOfflineAtual = criarGraficoPie(document.getElementById('graficoOffline').getContext('2d'), labelsOffline, valoresOffline);
+
+        if(graficoTraficAtual) graficoTraficAtual.destroy();
+        const labelsTrf=[], valoresTrf=[];
+        Object.keys(trafegoPorRedeTec).forEach(chave=>{
+            if(trafegoPorRedeTec[chave]>0){
+                labelsTrf.push(chave);
+                valoresTrf.push(totalTrfGlobal>0?((trafegoPorRedeTec[chave]/totalTrfGlobal)*100).toFixed(2):0);
+            }
+        });
+        graficoTraficAtual = criarGraficoPie(document.getElementById('graficoTrafic').getContext('2d'), labelsTrf, valoresTrf);
+
+        if(graficoInstavelAtual) graficoInstavelAtual.destroy();
+        graficoInstavelAtual = new Chart(document.getElementById('graficoInstavel').getContext('2d'),{
+            type:'bar',
+            data:{labels:Object.keys(instabilidadePorAPN), datasets:[{label:'Sessões Curtas', data:Object.values(instabilidadePorAPN), backgroundColor:Object.keys(instabilidadePorAPN).map((_,i)=>`hsl(${i*60%360},70%,50%)`)}]},
+            options:{responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true, title:{display:true,text:'Qtd. Sessões Curtas'}}, x:{title:{display:true,text:'APN'}}}}
+        });
+
+        if(graficoEstabilidadeAtual) graficoEstabilidadeAtual.destroy();
+        graficoEstabilidadeAtual = new Chart(document.getElementById('graficoEstabilidade').getContext('2d'),{
+            type:'pie',
+            data:{labels:['OK','Instável'], datasets:[{data:[totalOK,totalInstavel], backgroundColor:['#28a745','#dc3545']}]},
+            options:{responsive:true, plugins:{legend:{position:'bottom'}}}
+        });
+
+        // --- Preencher Tabela de Resumo ---
+        const tbodyResumo = document.querySelector('#tabelaResumo tbody');
+        tbodyResumo.innerHTML = '';
+
+        Object.entries(tecnologiaContagem).forEach(([tec, val])=>{
+            tbodyResumo.innerHTML += `<tr><td>Tecnologia</td><td>${tec}</td><td>${val}</td></tr>`;
+        });
+
+        Object.entries(tempoPorRedeTec).forEach(([chave, obj])=>{
+            const perc = totalOfflineGlobal>0?((obj.offline/totalOfflineGlobal)*100).toFixed(2):0;
+            tbodyResumo.innerHTML += `<tr><td>Tempo Offline</td><td>${chave}</td><td>${perc}%</td></tr>`;
+        });
+
+        Object.entries(trafegoPorRedeTec).forEach(([chave, val])=>{
+            const perc = totalTrfGlobal>0?((val/totalTrfGlobal)*100).toFixed(2):0;
+            tbodyResumo.innerHTML += `<tr><td>Tráfego</td><td>${chave}</td><td>${perc}%</td></tr>`;
+        });
+
+        Object.entries(instabilidadePorAPN).forEach(([apn, val])=>{
+            tbodyResumo.innerHTML += `<tr><td>Instabilidade</td><td>${apn}</td><td>${val}</td></tr>`;
+        });
+
+        tbodyResumo.innerHTML += `<tr><td>Estabilidade</td><td>OK</td><td>${totalOK}</td></tr>`;
+        tbodyResumo.innerHTML += `<tr><td>Estabilidade</td><td>Instável</td><td>${totalInstavel}</td></tr>`;
+    });
+
+
+    // --- Exportar XLSX ---
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+    const tabela = document.getElementById('tabelaResultados');
+    const wb = XLSX.utils.table_to_book(tabela, {sheet:"Conexoes"});
+    XLSX.writeFile(wb, "conexoes.xlsx");
+});
+
+    // --- Exportar PDF ---
+
+async function exportarParaPDF() {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const margem = 20;
+    const larguraPagina = pdf.internal.pageSize.getWidth();
+    const alturaPagina = pdf.internal.pageSize.getHeight();
+    let yPos = margem;
+
+    // --- Título ---
+    pdf.setFontSize(16);
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Análise de Conexões', larguraPagina / 2, yPos, { align: 'center' });
+    yPos += 30;
+
+    // --- Avisos ---
+    const avisos = document.getElementById("avisos");
+    if (avisos) {
+        const canvasAvisos = await html2canvas(avisos, { scale: 2 });
+        const imgAvisos = canvasAvisos.toDataURL("image/png");
+        const escalaAvisos = (larguraPagina - 2 * margem) / canvasAvisos.width;
+        const alturaAvisos = canvasAvisos.height * escalaAvisos;
+
+        pdf.setFontSize(12);
+        pdf.setFont(undefined, 'bold');
+        pdf.text("Informações do Sistema", margem, yPos - 5);
+        pdf.addImage(imgAvisos, "PNG", margem, yPos, larguraPagina - 2 * margem, alturaAvisos);
+        yPos += alturaAvisos + 20;
+    }
+
+    // --- Gráficos principais abaixo dos avisos ---
+    const graficosPrincipais = [
+        { id: 'graficoTecnologia', titulo: 'Tecnologia (%)' },
+        { id: 'graficoOffline', titulo: 'Tempo Offline (%)' }
+    ];
+
+    const larguraGrafico = (larguraPagina - 3 * margem) / 2; // 2 gráficos lado a lado
+    const alturaGrafico = 180; // altura fixa igual para todos
+
+    for (let i = 0; i < graficosPrincipais.length; i++) {
+        let g = graficosPrincipais[i];
+        let canvas = document.getElementById(g.id);
+        if (!canvas) continue;
+
+        const xPos = margem + i * (larguraGrafico + margem);
+        pdf.setFontSize(12);
+        pdf.setFont(undefined, 'bold');
+        pdf.text(g.titulo, xPos, yPos - 5);
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', xPos, yPos, larguraGrafico, alturaGrafico);
+    }
+
+    yPos += alturaGrafico + 30;
+
+    // --- Próximos gráficos lado a lado: Tráfego Total e Instabilidade APN ---
+    const graficosLaterais = [
+        { id: 'graficoTrafic', titulo: 'Tráfego Total (%)' },
+        { id: 'graficoInstavel', titulo: 'Instabilidade por APN' }
+    ];
+
+    for (let i = 0; i < graficosLaterais.length; i++) {
+        let g = graficosLaterais[i];
+        let canvas = document.getElementById(g.id);
+        if (!canvas) continue;
+
+        const xPos = margem + i * (larguraGrafico + margem);
+        pdf.setFontSize(12);
+        pdf.setFont(undefined, 'bold');
+        pdf.text(g.titulo, xPos, yPos - 5);
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', xPos, yPos, larguraGrafico, alturaGrafico);
+    }
+
+    yPos += alturaGrafico + 30;
+
+    // --- Gráfico Estabilidade Geral (mesmo tamanho dos outros) ---
+    const graficoEstabilidade = document.getElementById('graficoEstabilidade');
+    if (graficoEstabilidade) {
+        if (yPos + alturaGrafico > alturaPagina - margem) {
+            pdf.addPage();
+            yPos = margem;
+        }
+        pdf.setFontSize(12);
+        pdf.setFont(undefined, 'bold');
+        pdf.text('Estabilidade Geral', margem, yPos - 5);
+        pdf.addImage(graficoEstabilidade.toDataURL('image/png'), 'PNG', margem, yPos, larguraGrafico, alturaGrafico);
+        yPos += alturaGrafico + 30;
+    }
+
+    // --- Tabela resumo ---
+    const tabelaResumo = document.getElementById("tabelaResumo");
+    if (tabelaResumo) {
+        const canvasTabela = await html2canvas(tabelaResumo, { scale: 2 });
+        const imgTabela = canvasTabela.toDataURL("image/png");
+        const escalaTabela = (larguraPagina - 2 * margem) / canvasTabela.width;
+        const alturaTabela = canvasTabela.height * escalaTabela;
+
+        if (yPos + alturaTabela > alturaPagina - margem) {
+            pdf.addPage();
+            yPos = margem;
+        }
+
+        pdf.setFontSize(12);
+        pdf.setFont(undefined, 'bold');
+        pdf.text("Resumo dos Valores", margem, yPos - 5);
+        pdf.addImage(imgTabela, "PNG", margem, yPos, larguraPagina - 2 * margem, alturaTabela);
+    }
+
+    pdf.save('relatorio_analise_conexoes.pdf');
+}
+
+
+    document.getElementById('exportPdfBtn').addEventListener('click', exportarParaPDF);
+
+    // --- Limpar Tudo ---
+    document.getElementById('limparBtn').addEventListener('click', () => {
+        document.getElementById('csvFile').value = '';
+        document.getElementById('cabecalhoTabela').innerHTML = '';
+        document.querySelector('#tabelaResultados tbody').innerHTML = '';
+        document.querySelector('#tabelaResumo tbody').innerHTML = '';
+
+        if(graficoTecnologiaAtual) { graficoTecnologiaAtual.destroy(); graficoTecnologiaAtual=null; }
+        if(graficoOfflineAtual) { graficoOfflineAtual.destroy(); graficoOfflineAtual=null; }
+        if(graficoTraficAtual) { graficoTraficAtual.destroy(); graficoTraficAtual=null; }
+        if(graficoInstavelAtual) { graficoInstavelAtual.destroy(); graficoInstavelAtual=null; }
+        if(graficoEstabilidadeAtual) { graficoEstabilidadeAtual.destroy(); graficoEstabilidadeAtual=null; }
+    });
+});
+</script>
+</body>
+</html>
